@@ -56,10 +56,10 @@
     <button class="quiet" type="submit">关闭真实发送并立刻跑一轮</button>
   </form>
   {% else %}
-  <form method="post" action="{{ url_for('toggle') }}" data-confirm="确定开启真实发送？这一轮会回复还没处理过的未读信，并把原信标成已读。已经处理过的信不会再发。">
+  <form class="confirm-form" method="post" action="{{ url_for('toggle') }}" data-confirm="确定开启真实发送？这一轮会回复还没处理过的未读信，并把原信标成已读。已经处理过的信不会再发。">
     <label class="check">
       <input type="checkbox" name="confirm" value="1" required>
-      我确认这一轮会真实发信
+      <span>我确认这一轮会真实发信</span>
     </label>
     <button class="danger" type="submit">开启真实发送并立刻跑一轮</button>
   </form>
