@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}最近的邮件{% endblock %}
+{% block body %}
+<header class="top">
+  <div>
+    <p class="eyebrow">只在本机打开</p>
+    <h1>邮件自动回复</h1>
+    {% if account %}
+    <p class="account">已连接 {{ account }}</p>
+    {% endif %}
+  </div>
+  <a class="button quiet" href="{{ url_for('profile_page') }}">编辑个人资料</a>
+</header>
+
+{% if live %}
+<p class="banner danger">真实发送已开启。新的未读信会按个人资料回复，并标成已读。</p>
+{% else %}
+<p class="banner">现在只演练。回复写到本机 data/outbox，不发信，也不把原信标成已读。</p>
+{% endif %}
+{% if placeholder %}
+<p class="banner warn">个人资料还是占位示例。可以先演练，但不能开启真实发送。</p>
+{% endif %}
+
+{% with messages = get_flashed_messages() %}
+  {% for message in messages %}
+  <p class="banner danger">{{ message }}</p>
+  {% endfor %}
+{% endwith %}
+{% for message in errors %}
+<p class="banner danger">{{ message }}</p>
+{% endfor %}
+
+{% if last_run %}
+<section class="panel">
+  <h2>最近一轮</h2>
+  <p>{{ last_run.summary }}</p>
+  {% if last_run.error %}
+  <p class="banner danger">{{ last_run.error }}</p>
+  {% endif %}
+  {% if last_run.lines %}
+  <ul class="lines">
+    {% for line in last_run.lines %}
+    <li>{{ line }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="actions">
+  <form method="post" action="{{ url_for('run_now') }}" {% if live %}data-confirm="当前是真实发送。这一轮会真正回复还没处理过的未读信，并把原信标成已读。"{% endif %}>
+    <button type="submit">按当前模式跑一轮</button>
+  </form>
+  {% if live %}
+  <form method="post" action="{{ url_for('toggle') }}" data-confirm="将关闭真实发送。这一轮只把回复写在本机，不会发信。">
+    <button class="quiet" type="submit">关闭真实发送并立刻跑一轮</button>
+  </form>
+  {% else %}
+  <form method="post" action="{{ url_for('toggle') }}" data-confirm="确定开启真实发送？这一轮会回复还没处理过的未读信，并把原信标成已读。已经处理过的信不会再发。">
+    <label class="check">
+      <input type="checkbox" name="confirm" value="1" required>
+      我确认这一轮会真实发信
+    </label>
+    <button class="danger" type="submit">开启真实发送并立刻跑一轮</button>
+  </form>
+  {% endif %}
+  <p class="hint">程序开着时，大约每小时还会自动跑一轮。同一封信只处理一次。促销、社交和论坛邮件不会回复。</p>
+</section>
+
+<section>
+  <h2>最近的邮件</h2>
+  <ul class="legend">
+    <li><span class="tag sent">已自动回复</span></li>
+    <li><span class="tag drafted">演练已保存</span></li>
+    <li><span class="tag skipped">已跳过 / 不会自动回复</span></li>
+    <li><span class="tag pending">未处理</span></li>
+    <li><span class="tag read">已读，未曾自动回复</span></li>
+  </ul>
+  {% if rows %}
+    {% for row in rows %}
+    <article class="mail">
+      <div class="mail-head">
+        <div>
+          <h3>{{ row.subject }}</h3>
+          <p class="meta">{{ row.who }} · {{ row.date }}</p>
+        </div>
+        <span class="tag {{ row.kind }}">{{ row.status }}</span>
+      </div>
+      <pre>{{ row.body }}</pre>
+      {% if row.reply %}
+      <div class="reply">
+        <p class="meta">生成的回复</p>
+        <pre>{{ row.reply }}</pre>
+        {% if row.outbox %}
+        <p class="hint">{{ row.outbox }}</p>
+        {% endif %}
+      </div>
+      {% endif %}
+    </article>
+    {% endfor %}
+  {% else %}
+  <p class="empty">这里还没有邮件。Gmail 授权成功后，会显示最近的收件箱。</p>
+  {% endif %}
+</section>
+{% endblock %}

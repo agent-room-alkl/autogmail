@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}个人资料{% endblock %}
+{% block body %}
+<header class="top">
+  <div>
+    <p class="eyebrow">只使用写明的事实</p>
+    <h1>个人资料</h1>
+  </div>
+  <a class="button quiet" href="{{ url_for('home') }}">返回邮件</a>
+</header>
+
+{% if error %}
+<p class="banner danger">{{ error }}</p>
+{% endif %}
+{% with messages = get_flashed_messages() %}
+  {% for message in messages %}
+  <p class="banner">{{ message }}</p>
+  {% endfor %}
+{% endwith %}
+{% if placeholder %}
+<p class="banner warn">现在还是占位示例。改成你自己的事实之前，不能开启真实发送。</p>
+{% endif %}
+
+<form method="post" action="{{ url_for('profile_save') }}" class="profile">
+  <label>
+    名字
+    <input name="name" maxlength="80" required value="{{ profile.name }}">
+  </label>
+  <label>
+    身份
+    <input name="role" maxlength="120" required value="{{ profile.role }}">
+  </label>
+  <label>
+    自我介绍
+    <textarea name="introduction" maxlength="4000" required rows="6">{{ profile.introduction }}</textarea>
+  </label>
+  <label>
+    语气
+    <textarea name="tone" maxlength="1000" required rows="3">{{ profile.tone }}</textarea>
+  </label>
+  <label>
+    不能承诺的事
+    <textarea name="cannot_promise" required rows="5">{{ profile.cannot_promise_text }}</textarea>
+    <span class="hint">一行一条。没写在资料里的经历、电话、地址和承诺，回复里不会编。</span>
+  </label>
+  <label>
+    本人会说的话
+    <textarea name="sample_phrases" required rows="5">{{ profile.sample_phrases_text }}</textarea>
+    <span class="hint">一行一句。用来靠近你的口气，不会被生硬塞进每封信。</span>
+  </label>
+  <button type="submit">保存个人资料</button>
+</form>
+{% endblock %}
