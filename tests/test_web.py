@@ -55,6 +55,12 @@ class WebTests(unittest.TestCase):
         self.assertIn("本机", remote.get_data(as_text=True))
         forged = self.client.post("/run", headers={"Origin": "http://evil.example"})
         self.assertEqual(forged.status_code, 403)
+        os.environ["VERCEL"] = "1"
+        try:
+            deployed = self.client.get("/", base_url="https://autogmail.vercel.app")
+            self.assertEqual(deployed.status_code, 200)
+        finally:
+            os.environ.pop("VERCEL", None)
 
     def test_live_switch_rejects_placeholder_and_missing_confirmation(self):
         missing = self.client.post("/toggle", follow_redirects=True)

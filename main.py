@@ -6,12 +6,22 @@
 
 import argparse
 
+from flask import Flask
+
 from gmail_auto.console import configure_stdio, say
 from gmail_auto.envfile import load_env
 from gmail_auto.errors import ConfigError
+from gmail_auto.paths import CODE_ROOT
 from gmail_auto.runner import start_scheduler
 from gmail_auto.store import is_live
-from gmail_auto.web import PORT, run_server
+from gmail_auto.web import PORT, configure_app, run_server
+
+app = Flask(
+    __name__,
+    template_folder=str(CODE_ROOT / "templates"),
+    static_folder=str(CODE_ROOT / "static"),
+)
+configure_app(app)
 
 
 def main(argv: list[str] | None = None) -> int:

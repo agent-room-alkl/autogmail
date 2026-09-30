@@ -1,3 +1,4 @@
+import os
 import secrets
 
 from flask import Flask, abort, flash, redirect, request, url_for
@@ -25,6 +26,11 @@ def create_app() -> Flask:
         template_folder=str(CODE_ROOT / "templates"),
         static_folder=str(CODE_ROOT / "static"),
     )
+    configure_app(app)
+    return app
+
+
+def configure_app(app: Flask) -> None:
     app.config["MAX_CONTENT_LENGTH"] = 200_000
     app.config["TEMPLATES_AUTO_RELOAD"] = True
     app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
@@ -32,14 +38,11 @@ def create_app() -> Flask:
 
     @app.before_request
     def local_only():
-        host = (request.host or "").split(":")[0].strip().lower()
-        if host not in _ALLOWED_HOSTS:
+        if not _host_allowed(_request_host()):
             abort(403)
         if request.method == "POST":
             origin = request.headers.get("Origin", "")
-            if origin and not (
-                origin.startswith("http://127.0.0.1") or origin.startswith("http://localhost")
-            ):
+            if origin and not _host_allowed(_origin_host(origin)):
                 abort(403)
 
     @app.get("/")
@@ -87,8 +90,6 @@ def create_app() -> Flask:
     @app.errorhandler(413)
     def too_large(_exc):
         return "提交的内容太长了。", 413
-
-    return app
 
 
 def run_server() -> None:
@@ -281,12 +282,36 @@ def _render(template: str, **context):
     return render_template(template, **context)
 
 
+def _request_host() -> str:
+    forwarded = (request.headers.get("X-Forwarded-Host") or "").split(",")[0].strip()
+    raw = forwarded or (request.host or "")
+    return raw.split(":")[0].strip().lower()
+
+
+def _origin_host(origin: str) -> str:
+    return origin.split("://", 1)[-1].split("/")[0].split(":")[0].strip().lower()
+
+
+def _host_allowed(host: str) -> bool:
+    if os.environ.get("VERCEL"):
+        return True
+    return host in _ALLOWED_HOSTS
+
+
 def _secret() -> str:
-    path = data_dir() / "web_secret.txt"
-    if path.exists():
-        value = path.read_text(encoding="utf-8").strip()
-        if value:
-            return value
-    value = secrets.token_hex(32)
-    atomic_write(path, value + "\n")
-    return value
+    configured = os.environ.get("FLASK_SECRET_KEY", "").strip()
+    if configured:
+        return configured
+    if os.environ.get("VERCEL"):
+        return "autogmail-vercel"
+    try:
+        path = data_dir() / "web_secret.txt"
+        if path.exists():
+            value = path.read_text(encoding="utf-8").strip()
+            if value:
+                return value
+        value = secrets.token_hex(32)
+        atomic_write(path, value + "\n")
+        return value
+    except OSError:
+        return secrets.token_hex(32)
