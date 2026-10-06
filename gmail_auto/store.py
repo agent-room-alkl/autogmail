@@ -101,7 +101,7 @@ def write_draft(mail, reply: str, language: str) -> str:
         f"发件人：{who}\n"
         f"主题：{mail.subject or '（无主题）'}\n"
         f"时间：{mail.date}\n"
-        f"语言：{'中文' if language == 'zh' else '英文'}\n"
+        "语言：中文和英文\n"
         "说明：演练稿，没有发送。\n\n"
         f"{reply}\n"
     )

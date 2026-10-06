@@ -4,7 +4,6 @@ import re
 
 from gmail_auto.envfile import openai_base_url, openai_model, require_openai_key
 from gmail_auto.errors import ReplyError
-from gmail_auto.filters import detect_language
 from gmail_auto.models import Mail
 from gmail_auto.profile_store import profile_as_prompt
 
@@ -13,7 +12,7 @@ _SYSTEM = """你在代写信的人回复他或她自己的电子邮件。你不�
 必须遵守：
 - 只用第一人称，像本人亲手写的。
 - 先回应来信里的具体事情，不要用空泛客套开头。
-- 整封回复只用一种语言。要求中文时，从头到尾都用中文；要求英文时，从头到尾都用英文。
+- 每封回复都写成中英两段。先写中文，空一行，再写意思相同的英文。两段都要回应对方的具体事情。
 - 只能使用个人资料里写明的事实。没有写到的经历、职务、电话、住址、时间安排和承诺，都不要编。
 - 资料里没有的内容，就说还不能确认，或按「不能承诺的事」婉拒。不要为了显得有帮助而补细节。
 - 可以称呼对方来信里的名字，但第一句就进入正事。
@@ -45,7 +44,7 @@ def generate_reply(mail: Mail, profile: dict, language: str) -> str:
         response = client.chat.completions.create(
             model=openai_model(),
             temperature=0.4,
-            max_tokens=700,
+            max_tokens=900,
             messages=[
                 {"role": "system", "content": _SYSTEM},
                 {"role": "user", "content": _user_prompt(mail, profile, language)},
@@ -80,11 +79,9 @@ def ensure_safe(reply: str, profile: dict, language: str, mail: Mail | None = No
     if _AI.search(text):
         raise ReplyError("回复不像本人写的，已丢弃。")
     cjk = len(re.findall(r"[\u4e00-\u9fff]", text))
-    if language == "zh":
-        if detect_language(text) != "zh" or cjk < 2:
-            raise ReplyError("回复没有整封使用中文，已拦截。")
-    elif detect_language(text) != "en":
-        raise ReplyError("回复没有整封使用英文，已拦截。")
+    english_words = re.findall(r"[A-Za-z]{2,}", text)
+    if cjk < 2 or len(english_words) < 3:
+        raise ReplyError("回复需要同时包含中文和英文，已拦截。")
     if _unknown_number(text, profile):
         raise ReplyError("回复里出现了资料中没有的号码，已拦截。")
     context = _context(profile, mail).lower()
@@ -106,10 +103,8 @@ def clean_reply(text: str) -> str:
 
 
 def _user_prompt(mail: Mail, profile: dict, language: str) -> str:
-    if language == "zh":
-        lock = "这封来信按中文处理。整封回复只能使用中文，不要夹英文句子。"
-    else:
-        lock = "This letter is English. Write the entire reply in English only."
+    del language
+    lock = "请先用中文写一段，空一行，再用英文写一段。两段意思相同，都只使用资料里的事实。"
     return (
         "个人资料（只能使用这里的事实）：\n"
         f"{profile_as_prompt(profile)}\n\n"

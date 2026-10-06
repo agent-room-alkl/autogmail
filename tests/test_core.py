@@ -151,19 +151,22 @@ class SafetyTests(unittest.TestCase):
             "cannot_promise": ["不承诺日期"],
             "sample_phrases": ["我看到了。"],
         }
-        ensure_safe("我周五再回复你。", profile, "zh")
-        ensure_safe("I will reply on Friday.", profile, "en")
-        ensure_safe("编号 20260930 我看到了。", profile, "zh")
+        both = "我周五再回复你。\n\nI will reply on Friday."
+        ensure_safe(both, profile, "zh")
+        ensure_safe(both, profile, "en")
+        ensure_safe("编号 20260930 我看到了。\n\nI saw the note.", profile, "zh")
         with self.assertRaises(ReplyError):
-            ensure_safe("请打我电话 13800138000。", profile, "zh")
+            ensure_safe("请打我电话 13800138000。\n\nPlease call me today.", profile, "zh")
         with self.assertRaises(ReplyError):
-            ensure_safe("请联系 138-0013-8000，我看到了。", profile, "zh")
+            ensure_safe("请联系 138-0013-8000，我看到了。\n\nPlease call me.", profile, "zh")
         with self.assertRaises(ReplyError):
-            ensure_safe("详见 https://example.com/secret 。我看到了。", profile, "zh")
+            ensure_safe("详见 https://example.com/secret 。我看到了。\n\nSee the link.", profile, "zh")
         with self.assertRaises(ReplyError):
-            ensure_safe("Write me at other@example.com today.", profile, "en")
+            ensure_safe("请写信到 other@example.com。\n\nWrite me at other@example.com today.", profile, "en")
         with self.assertRaises(ReplyError):
             ensure_safe("I saw your note.", profile, "zh")
+        with self.assertRaises(ReplyError):
+            ensure_safe("我看到了。", profile, "en")
         with self.assertRaises(ReplyError):
             ensure_safe("As an AI I saw your note.", profile, "en")
         with self.assertRaises(ReplyError):
@@ -178,9 +181,9 @@ class SafetyTests(unittest.TestCase):
             "cannot_promise": ["不承诺日期"],
             "sample_phrases": ["我看到了。"],
         }
-        ensure_safe("我的电话是 13800138000。", profile, "zh")
+        ensure_safe("我的电话是 13800138000。\n\nMy number is 13800138000.", profile, "zh")
         mail = sample(body="请看 https://example.com/a")
-        ensure_safe("I saw https://example.com/a in your note.", profile, "en", mail)
+        ensure_safe("我看到了 https://example.com/a 。\n\nI saw https://example.com/a in your note.", profile, "en", mail)
 
     def test_clean_reply_strips_wrapper(self):
         self.assertEqual(clean_reply("```\n我看到了。\n```"), "我看到了。")
