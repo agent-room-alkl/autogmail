@@ -208,6 +208,52 @@ class WebTests(unittest.TestCase):
                     os.environ[name] = value
         self.assertIn("已登录", done.get_data(as_text=True))
 
+    def test_oauth_keeps_the_grant_in_the_session_without_kv(self):
+        saved = {name: os.environ.pop(name, None) for name in (
+            "KV_REST_API_URL",
+            "KV_REST_API_TOKEN",
+            "UPSTASH_REDIS_REST_URL",
+            "UPSTASH_REDIS_REST_TOKEN",
+            "GMAIL_CLIENT_ID",
+            "GMAIL_CLIENT_SECRET",
+        )}
+        os.environ["GMAIL_CLIENT_ID"] = "test.apps.googleusercontent.com"
+        os.environ["GMAIL_CLIENT_SECRET"] = "test-secret"
+
+        class _Creds:
+            refresh_token = "refresh-test"
+
+            def to_json(self):
+                return '{"refresh_token":"refresh-test","client_id":"test","client_secret":"test-secret","token":"access"}'
+
+        class _Flow:
+            credentials = _Creds()
+
+            def fetch_token(self, authorization_response):
+                return None
+
+        with self.client.session_transaction() as current:
+            current["oauth_state"] = "state-test"
+            current["user"] = "lee@example.com"
+        try:
+            with patch("google_auth_oauthlib.flow.Flow.from_client_config", return_value=_Flow()), patch(
+                "gmail_auto.gmail_client.GmailClient"
+            ) as client:
+                client.return_value.get_user_email.return_value = "lee@example.com"
+                client.return_value.list_recent.return_value = []
+                page = self.client.get("/oauth/callback?state=state-test&code=abc", follow_redirects=True)
+        finally:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+        text = page.get_data(as_text=True)
+        self.assertNotIn("Vercel KV", text)
+        self.assertIn("已授权", text)
+        with self.client.session_transaction() as current:
+            self.assertIn("refresh-test", current.get("gmail_token", ""))
+
     def test_old_gmail_grant_offers_a_manual_button(self):
         import time
 

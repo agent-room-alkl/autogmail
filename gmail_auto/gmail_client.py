@@ -182,6 +182,10 @@ def load_credentials(allow_browser: bool):
     if stored:
         return _refresh_saved(_credentials_from_raw(stored), None, persist_remote=True)
 
+    in_session = _session_token()
+    if in_session:
+        return _refresh_saved(_credentials_from_raw(in_session), None, persist_remote=False, persist_session=True)
+
     env_creds = _credentials_from_env()
     if env_creds is not None:
         return _refresh_saved(env_creds, None, persist_remote=False)
@@ -254,7 +258,30 @@ def _credentials_from_raw(raw: str):
         raise ConfigError("保存的 Gmail 授权缺少 refresh_token、client_id 或 client_secret。") from exc
 
 
-def _refresh_saved(creds, token_path, persist_remote: bool):
+def _session_token() -> str | None:
+    try:
+        from flask import has_request_context, session
+    except ImportError:
+        return None
+    if not has_request_context():
+        return None
+    raw = session.get("gmail_token")
+    if isinstance(raw, str) and raw.strip():
+        return raw
+    return None
+
+
+def _remember_session_token(raw: str) -> None:
+    try:
+        from flask import has_request_context, session
+    except ImportError:
+        return
+    if has_request_context():
+        session["gmail_token"] = raw
+        session.modified = True
+
+
+def _refresh_saved(creds, token_path, persist_remote: bool, persist_session: bool = False):
     if not (creds and creds.expired and creds.refresh_token):
         return creds
     try:
@@ -282,6 +309,8 @@ def _refresh_saved(creds, token_path, persist_remote: bool):
         from gmail_auto.token_store import save_token_raw
 
         save_token_raw(raw)
+    if persist_session:
+        _remember_session_token(raw)
     return creds
 
 

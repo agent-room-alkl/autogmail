@@ -162,9 +162,6 @@ def configure_app(app: Flask) -> None:
         from google_auth_oauthlib.flow import Flow
         from gmail_auto.token_store import save_token_raw, storage_ready
 
-        if not storage_ready():
-            flash("授权页能打开，但还没有 Vercel KV，刷新令牌没法保存。")
-            return redirect(url_for("home"))
         flow = Flow.from_client_config(config, SCOPES)
         flow.redirect_uri = _oauth_redirect()
         try:
@@ -176,8 +173,11 @@ def configure_app(app: Flask) -> None:
         if not getattr(creds, "refresh_token", None):
             flash("没有拿到可长期使用的授权。请再点一次「连接 Gmail」。")
             return redirect(url_for("home"))
-        save_token_raw(creds.to_json())
+        raw = creds.to_json()
+        session["gmail_token"] = raw
         session.pop("oauth_state", None)
+        if storage_ready():
+            save_token_raw(raw)
         gmail_email = session.get("user") or ""
         try:
             from gmail_auto.gmail_client import GmailClient
