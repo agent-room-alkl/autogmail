@@ -171,6 +171,43 @@ class WebTests(unittest.TestCase):
         missing = self.client.post("/login/code", data={"email": "new@example.com", "mode": "login"})
         self.assertIn("还没注册", missing.get_data(as_text=True))
 
+    def test_verification_code_does_not_need_vercel_kv(self):
+        previous = os.environ.get("VERCEL")
+        saved = {name: os.environ.pop(name, None) for name in (
+            "KV_REST_API_URL",
+            "KV_REST_API_TOKEN",
+            "UPSTASH_REDIS_REST_URL",
+            "UPSTASH_REDIS_REST_TOKEN",
+        )}
+        os.environ["VERCEL"] = "1"
+        sent = {}
+
+        def capture(_to, code):
+            sent["code"] = code
+
+        try:
+            with patch("gmail_auto.web.deliver_code", capture):
+                started = self.client.post(
+                    "/login/code",
+                    data={"email": "lee@example.com", "mode": "register"},
+                    follow_redirects=True,
+                )
+            self.assertNotIn("Vercel KV", started.get_data(as_text=True))
+            done = self.client.post(
+                "/login",
+                data={"email": "lee@example.com", "mode": "register", "code": sent["code"]},
+                follow_redirects=True,
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("VERCEL", None)
+            else:
+                os.environ["VERCEL"] = previous
+            for name, value in saved.items():
+                if value is not None:
+                    os.environ[name] = value
+        self.assertIn("已登录", done.get_data(as_text=True))
+
     def test_old_gmail_grant_offers_a_manual_button(self):
         import time
 

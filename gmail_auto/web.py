@@ -3,13 +3,7 @@ import secrets
 
 from flask import Flask, abort, flash, redirect, request, session, url_for
 
-from gmail_auto.accounts import (
-    clear_pending,
-    finish_verification,
-    gmail_status,
-    mark_gmail_authorized,
-    start_verification,
-)
+from gmail_auto.accounts import finish_verification, gmail_status, mark_gmail_authorized, start_verification
 from gmail_auto.errors import ConfigError
 from gmail_auto.mailer import deliver_code
 from gmail_auto.filters import Skip, classify
@@ -74,14 +68,15 @@ def configure_app(app: Flask) -> None:
         if not _email_ok(email):
             return _login_view(mode=mode, email=email, error="请输入邮箱。"), 400
         try:
-            code = start_verification(email, mode)
+            code, otp = start_verification(email, mode, session.get("otp"))
             try:
                 deliver_code(email, code)
             except ConfigError:
-                clear_pending(email)
+                session.pop("otp", None)
                 raise
         except ConfigError as exc:
             return _login_view(mode=mode, email=email, error=str(exc)), 400
+        session["otp"] = otp
         session["pending_email"] = email.strip().lower()
         session["pending_mode"] = mode
         return redirect(url_for("login_page", mode=mode, sent=1))
@@ -95,11 +90,14 @@ def configure_app(app: Flask) -> None:
             return _login_view(mode=mode, email=email, error="请输入邮箱。"), 400
         if not code:
             return _login_view(mode=mode, email=email, sent=True, error="请输入验证码。"), 400
+        otp = dict(session.get("otp") or {})
         try:
-            user = finish_verification(email, mode, code)
+            user = finish_verification(email, mode, code, otp)
         except ConfigError as exc:
+            session["otp"] = otp
             return _login_view(mode=mode, email=email, sent=True, error=str(exc)), 400
         session["user"] = user
+        session.pop("otp", None)
         session.pop("pending_email", None)
         session.pop("pending_mode", None)
         flash("已登录。")

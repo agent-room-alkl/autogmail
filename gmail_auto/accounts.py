@@ -1,4 +1,4 @@
-"""邮箱账号和验证码。线上放在 KV，本机放在 data/accounts.json。"""
+"""邮箱账号和验证码。验证码放在这次登录的会话里，不依赖 Vercel KV。"""
 
 import hashlib
 import json
@@ -22,23 +22,20 @@ def normalize_email(value: str) -> str:
     return value.strip().lower()
 
 
-def start_verification(email: str, purpose: str) -> str:
+def start_verification(email: str, purpose: str, pending: dict | None = None) -> tuple[str, dict]:
     email = normalize_email(email)
     purpose = _purpose(purpose)
     _ensure_allowed(email)
-    data = _load()
-    users = data.setdefault("users", {})
-    if purpose == "register" and email in users:
-        raise ConfigError("这个邮箱已经注册，请直接登录。")
-    if purpose == "login" and email not in users:
-        raise ConfigError("这个邮箱还没注册。")
-    pending = data.setdefault("otp", {}).get(email) or {}
-    sent_at = float(pending.get("sent_at") or 0)
-    if sent_at and time.time() - sent_at < _RESEND_WAIT:
+    _check_known_user(email, purpose)
+    current = pending if isinstance(pending, dict) else {}
+    sent_at = float(current.get("sent_at") or 0)
+    same = current.get("email") == email and current.get("purpose") == purpose
+    if same and sent_at and time.time() - sent_at < _RESEND_WAIT:
         raise ConfigError("验证码刚刚发过，请等一分钟再获取。")
     code = f"{secrets.randbelow(1_000_000):06d}"
     salt = secrets.token_hex(8)
-    data.setdefault("otp", {})[email] = {
+    return code, {
+        "email": email,
         "purpose": purpose,
         "salt": salt,
         "hash": _digest(salt, code),
@@ -46,48 +43,54 @@ def start_verification(email: str, purpose: str) -> str:
         "expires": time.time() + _CODE_TTL,
         "tries": 0,
     }
-    _save(data)
-    return code
 
 
-def finish_verification(email: str, purpose: str, code: str) -> str:
+def finish_verification(email: str, purpose: str, code: str, pending: dict | None = None) -> str:
     email = normalize_email(email)
     purpose = _purpose(purpose)
     entered = "".join(ch for ch in code if ch.isdigit())
-    data = _load()
-    pending = data.setdefault("otp", {}).get(email)
-    if not pending or pending.get("purpose") != purpose:
+    current = pending if isinstance(pending, dict) else {}
+    if current.get("email") != email or current.get("purpose") != purpose:
         raise ConfigError("请先获取验证码。")
-    if time.time() > float(pending.get("expires") or 0):
-        data["otp"].pop(email, None)
-        _save(data)
+    if time.time() > float(current.get("expires") or 0):
+        current.clear()
         raise ConfigError("验证码已过期，请重新获取。")
-    if int(pending.get("tries") or 0) >= _MAX_TRIES:
-        data["otp"].pop(email, None)
-        _save(data)
+    if int(current.get("tries") or 0) >= _MAX_TRIES:
+        current.clear()
         raise ConfigError("验证码已失效，请重新获取。")
-    salt = str(pending.get("salt") or "")
-    if not secrets.compare_digest(_digest(salt, entered), str(pending.get("hash") or "")):
-        pending["tries"] = int(pending.get("tries") or 0) + 1
-        _save(data)
+    salt = str(current.get("salt") or "")
+    expected = str(current.get("hash") or "")
+    actual = _digest(salt, entered)
+    if len(actual) != len(expected) or not secrets.compare_digest(actual, expected):
+        current["tries"] = int(current.get("tries") or 0) + 1
         raise ConfigError("验证码不对。")
-    data["otp"].pop(email, None)
-    now = time.time()
-    users = data.setdefault("users", {})
-    if purpose == "register":
-        users[email] = {"created_at": now, "last_login": now}
-    else:
-        record = users.get(email)
-        if not isinstance(record, dict):
-            raise ConfigError("这个邮箱还没注册。")
-        record["last_login"] = now
-    _save(data)
+    current.clear()
+    _remember_user(email, purpose)
     return email
 
 
-def clear_pending(email: str) -> None:
+def _check_known_user(email: str, purpose: str) -> None:
+    if not _can_store_users():
+        return
+    users = _load().get("users") or {}
+    if purpose == "register" and email in users:
+        raise ConfigError("这个邮箱已经注册，请直接登录。")
+    if purpose == "login" and email not in users:
+        raise ConfigError("这个邮箱还没注册。")
+
+
+def _remember_user(email: str, purpose: str) -> None:
+    if not _can_store_users():
+        return
     data = _load()
-    data.setdefault("otp", {}).pop(normalize_email(email), None)
+    now = time.time()
+    users = data.setdefault("users", {})
+    if purpose == "register" or email not in users:
+        users[email] = {"created_at": now, "last_login": now}
+    else:
+        record = users.get(email)
+        if isinstance(record, dict):
+            record["last_login"] = now
     _save(data)
 
 
@@ -164,11 +167,17 @@ def _parse(raw) -> dict:
     return data
 
 
+def _can_store_users() -> bool:
+    if os.environ.get("VERCEL"):
+        return storage_ready()
+    return True
+
+
 def _save(data: dict) -> None:
     raw = json.dumps(data, ensure_ascii=False, indent=2)
     if os.environ.get("VERCEL") or storage_ready():
         if not storage_ready():
-            raise ConfigError("验证码没法保存。请先给这个项目接上 Vercel KV。")
+            return
         kv_set(_KEY, raw)
         return
     atomic_write(data_dir() / "accounts.json", raw + "\n")
