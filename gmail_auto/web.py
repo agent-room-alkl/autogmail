@@ -3,7 +3,15 @@ import secrets
 
 from flask import Flask, abort, flash, redirect, request, session, url_for
 
+from gmail_auto.accounts import (
+    clear_pending,
+    finish_verification,
+    gmail_status,
+    mark_gmail_authorized,
+    start_verification,
+)
 from gmail_auto.errors import ConfigError
+from gmail_auto.mailer import deliver_code
 from gmail_auto.filters import Skip, classify
 from gmail_auto.paths import CODE_ROOT, atomic_write, data_dir
 from gmail_auto.profile_store import (
@@ -50,36 +58,80 @@ def configure_app(app: Flask) -> None:
 
     @app.get("/")
     def home():
-        context = _home_context()
-        if not context["account"] and (context["hosted"] or web_client_config()):
-            return redirect(url_for("login_page"))
-        return _render("index.html", **context)
+        blocked = _login_required()
+        if blocked:
+            return blocked
+        return _render("index.html", **_home_context())
 
     @app.get("/login")
     def login_page():
-        return _render("login.html", email=session.get("login_email", ""), error="")
+        return _login_view()
+
+    @app.post("/login/code")
+    def login_code():
+        mode = _mode(request.form.get("mode"))
+        email = request.form.get("email", "").strip()
+        if not _email_ok(email):
+            return _login_view(mode=mode, email=email, error="请输入邮箱。"), 400
+        try:
+            code = start_verification(email, mode)
+            try:
+                deliver_code(email, code)
+            except ConfigError:
+                clear_pending(email)
+                raise
+        except ConfigError as exc:
+            return _login_view(mode=mode, email=email, error=str(exc)), 400
+        session["pending_email"] = email.strip().lower()
+        session["pending_mode"] = mode
+        return redirect(url_for("login_page", mode=mode, sent=1))
 
     @app.post("/login")
     def login_submit():
-        email = request.form.get("email", "").strip()
+        mode = _mode(request.form.get("mode") or session.get("pending_mode"))
+        email = (request.form.get("email") or session.get("pending_email") or "").strip()
+        code = request.form.get("code", "").strip()
         if not _email_ok(email):
-            return _render("login.html", email=email, error="请输入要授权的 Gmail 地址。"), 400
-        session["login_email"] = email
-        return redirect(url_for("oauth_start"))
+            return _login_view(mode=mode, email=email, error="请输入邮箱。"), 400
+        if not code:
+            return _login_view(mode=mode, email=email, sent=True, error="请输入验证码。"), 400
+        try:
+            user = finish_verification(email, mode, code)
+        except ConfigError as exc:
+            return _login_view(mode=mode, email=email, sent=True, error=str(exc)), 400
+        session["user"] = user
+        session.pop("pending_email", None)
+        session.pop("pending_mode", None)
+        flash("已登录。")
+        return redirect(url_for("home"))
+
+    @app.get("/logout")
+    def logout():
+        session.pop("user", None)
+        return redirect(url_for("login_page"))
 
     @app.post("/run")
     def run_now():
+        blocked = _login_required()
+        if blocked:
+            return blocked
         _run(lambda: run_once())
         return redirect(url_for("home"))
 
     @app.post("/toggle")
     def toggle():
+        blocked = _login_required()
+        if blocked:
+            return blocked
         confirmed = request.form.get("confirm") == "1"
         _run(lambda: toggle_and_run(confirmed))
         return redirect(url_for("home"))
 
     @app.get("/oauth")
     def oauth_start():
+        blocked = _login_required()
+        if blocked:
+            return blocked
         config = web_client_config()
         if config is None:
             flash("请先在 Vercel 设置 GMAIL_CLIENT_ID 和 GMAIL_CLIENT_SECRET。")
@@ -91,7 +143,7 @@ def configure_app(app: Flask) -> None:
 
         flow = Flow.from_client_config(config, SCOPES)
         flow.redirect_uri = _oauth_redirect()
-        hint = session.get("login_email", "")
+        hint = session.get("user") or ""
         options = {"access_type": "offline", "prompt": "consent"}
         if hint:
             options["login_hint"] = hint
@@ -128,7 +180,15 @@ def configure_app(app: Flask) -> None:
             return redirect(url_for("home"))
         save_token_raw(creds.to_json())
         session.pop("oauth_state", None)
-        flash("Gmail 已连接。接下来每小时会自动检查。")
+        gmail_email = session.get("user") or ""
+        try:
+            from gmail_auto.gmail_client import GmailClient
+
+            gmail_email = GmailClient(allow_browser=False).get_user_email() or gmail_email
+        except ConfigError:
+            pass
+        mark_gmail_authorized(gmail_email)
+        flash("Gmail 已授权。如果以后很久不登录，可以再点一次「重新授权」。")
         return redirect(url_for("home"))
 
     @app.get("/cron")
@@ -144,10 +204,16 @@ def configure_app(app: Flask) -> None:
 
     @app.get("/profile")
     def profile_page():
+        blocked = _login_required()
+        if blocked:
+            return blocked
         return _render("profile.html", **_profile_context())
 
     @app.post("/profile")
     def profile_save():
+        blocked = _login_required()
+        if blocked:
+            return blocked
         try:
             save_profile(profile_from_form(request.form))
         except ConfigError as exc:
@@ -211,7 +277,9 @@ def _home_context() -> dict:
         for mail in client.list_recent(25):
             rows.append(_row_from_mail(mail, processed.get(mail.id), account))
     except ConfigError as exc:
-        errors.append(str(exc))
+        text = str(exc)
+        if not text.startswith("还没有"):
+            errors.append(text)
         rows = _rows_from_store()
     except Exception as exc:
         errors.append(_safe_error(exc))
@@ -222,6 +290,10 @@ def _home_context() -> dict:
         last_run.setdefault("lines", [])
         last_run.setdefault("summary", "")
         last_run.setdefault("error", "")
+    try:
+        auth = gmail_status()
+    except ConfigError:
+        auth = {}
     return {
         "live": is_live(),
         "placeholder": placeholder,
@@ -230,8 +302,36 @@ def _home_context() -> dict:
         "rows": rows,
         "last_run": last_run,
         "hosted": bool(os.environ.get("VERCEL")),
-        "connect_url": url_for("login_page") if web_client_config() or os.environ.get("VERCEL") else "",
+        "user": session.get("user", ""),
+        "gmail_email": auth.get("email", ""),
+        "gmail_when": auth.get("authorized_text", ""),
+        "gmail_stale": auth.get("stale", False),
     }
+
+
+def _login_required():
+    if os.environ.get("VERCEL") and not session.get("user"):
+        return redirect(url_for("login_page"))
+    return None
+
+
+def _mode(value) -> str:
+    return value if value in {"login", "register"} else "login"
+
+
+def _login_view(mode=None, email=None, sent=None, error=""):
+    chosen = _mode(mode or request.args.get("mode"))
+    pending = session.get("pending_email", "")
+    showing_code = sent if sent is not None else request.args.get("sent") == "1"
+    if showing_code and pending and chosen != session.get("pending_mode"):
+        showing_code = False
+    return _render(
+        "login.html",
+        mode=chosen,
+        email=email if email is not None else (pending if showing_code else ""),
+        sent=bool(showing_code and (email or pending)),
+        error=error,
+    )
 
 
 def _profile_context(form=None) -> dict:

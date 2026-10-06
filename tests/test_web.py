@@ -133,10 +133,54 @@ class WebTests(unittest.TestCase):
 
     def test_login_asks_for_an_email_before_google(self):
         page = self.client.get("/login")
-        self.assertIn("邮箱", page.get_data(as_text=True))
-        self.assertNotIn("密码", page.get_data(as_text=True))
-        rejected = self.client.post("/login", data={"email": "不是邮箱"})
+        text = page.get_data(as_text=True)
+        self.assertIn("邮箱", text)
+        self.assertIn("注册", text)
+        self.assertIn("验证码", text)
+        self.assertNotIn("密码", text)
+        rejected = self.client.post("/login/code", data={"email": "不是邮箱", "mode": "register"})
         self.assertEqual(rejected.status_code, 400)
+
+    def test_register_verifies_the_code_then_login_uses_it(self):
+        sent = {}
+
+        def capture(_to, code):
+            sent["code"] = code
+
+        with patch("gmail_auto.web.deliver_code", capture):
+            started = self.client.post(
+                "/login/code",
+                data={"email": "lee@example.com", "mode": "register"},
+                follow_redirects=True,
+            )
+        self.assertIn("验证码已发到", started.get_data(as_text=True))
+        wrong = self.client.post(
+            "/login",
+            data={"email": "lee@example.com", "mode": "register", "code": "000000"},
+        )
+        self.assertEqual(wrong.status_code, 400)
+        done = self.client.post(
+            "/login",
+            data={"email": "lee@example.com", "mode": "register", "code": sent["code"]},
+            follow_redirects=True,
+        )
+        self.assertIn("已登录", done.get_data(as_text=True))
+        self.assertIn("授权 Gmail", done.get_data(as_text=True))
+        again = self.client.post("/login/code", data={"email": "lee@example.com", "mode": "register"})
+        self.assertIn("已经注册", again.get_data(as_text=True))
+        missing = self.client.post("/login/code", data={"email": "new@example.com", "mode": "login"})
+        self.assertIn("还没注册", missing.get_data(as_text=True))
+
+    def test_old_gmail_grant_offers_a_manual_button(self):
+        import time
+
+        from gmail_auto.accounts import mark_gmail_authorized
+
+        mark_gmail_authorized("lee@example.com", at=time.time() - 8 * 24 * 60 * 60)
+        page = self.client.get("/")
+        text = page.get_data(as_text=True)
+        self.assertIn("重新授权", text)
+        self.assertIn("手工重新授权", text)
 
     def test_cron_on_vercel_requires_the_secret(self):
         previous = os.environ.get("VERCEL")

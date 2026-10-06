@@ -1,28 +1,49 @@
 {% extends "base.html" %}
 {% block title %}登录{% endblock %}
 {% block body %}
-<header class="top">
-  <div>
-    <p class="eyebrow">连接 Gmail</p>
-    <h1>登录</h1>
-  </div>
-</header>
-
-{% if error %}
-<p class="banner danger">{{ error }}</p>
-{% endif %}
-{% with messages = get_flashed_messages() %}
-  {% for message in messages %}
-  <p class="banner danger">{{ message }}</p>
-  {% endfor %}
-{% endwith %}
-
-<form method="post" action="{{ url_for('login_submit') }}" class="profile">
-  <label>
-    邮箱
-    <input name="email" type="email" autocomplete="username" inputmode="email" maxlength="254" required placeholder="you@gmail.com" value="{{ email }}">
-  </label>
-  <p class="hint">填写要自动回复的 Gmail。下一步会打开 Google 的登录页，在那里完成登录。</p>
-  <button type="submit">继续</button>
-</form>
+<div class="auth-shell">
+  <section class="auth-copy">
+    <p class="eyebrow">邮件自动回复</p>
+    <h1>用邮箱进入</h1>
+    <p>邮箱就是用户名。注册时把验证码发到这个邮箱，填对以后才登录。</p>
+    <p>Gmail 授权在登录之后单独进行。长时间不登录或授权过期时，可以在工作台里手工重新授权。</p>
+  </section>
+  <section class="auth-card">
+    <div class="tabs">
+      <a class="{% if mode == 'login' %}on{% endif %}" href="{{ url_for('login_page', mode='login') }}">登录</a>
+      <a class="{% if mode == 'register' %}on{% endif %}" href="{{ url_for('login_page', mode='register') }}">注册</a>
+    </div>
+    {% if error %}
+    <p class="banner danger">{{ error }}</p>
+    {% endif %}
+    {% with messages = get_flashed_messages() %}
+      {% for message in messages %}
+      <p class="banner danger">{{ message }}</p>
+      {% endfor %}
+    {% endwith %}
+    {% if not sent %}
+    <form method="post" action="{{ url_for('login_code') }}" class="stack">
+      <input type="hidden" name="mode" value="{{ mode }}">
+      <label>
+        邮箱
+        <input name="email" type="email" autocomplete="username" inputmode="email" maxlength="254" required placeholder="you@gmail.com" value="{{ email }}">
+      </label>
+      <button type="submit">{% if mode == 'register' %}获取验证码并注册{% else %}获取验证码并登录{% endif %}</button>
+      <p class="hint">验证码会发到这个邮箱，10 分钟内有效。</p>
+    </form>
+    {% else %}
+    <form method="post" action="{{ url_for('login_submit') }}" class="stack">
+      <input type="hidden" name="mode" value="{{ mode }}">
+      <input type="hidden" name="email" value="{{ email }}">
+      <p class="account">验证码已发到 {{ email }}</p>
+      <label>
+        验证码
+        <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required placeholder="6 位数字">
+      </label>
+      <button type="submit">{% if mode == 'register' %}验证并完成注册{% else %}验证并登录{% endif %}</button>
+      <p class="hint"><a href="{{ url_for('login_page', mode=mode) }}">换一个邮箱</a></p>
+    </form>
+    {% endif %}
+  </section>
+</div>
 {% endblock %}

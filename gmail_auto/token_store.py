@@ -26,6 +26,18 @@ def load_token_raw() -> str | None:
     return str(result)
 
 
+def kv_get(key: str):
+    if not storage_ready():
+        return None
+    return _command(["GET", key])
+
+
+def kv_set(key: str, value: str) -> None:
+    if not storage_ready():
+        raise ConfigError("没有可保存的存储。请先连接 Vercel KV。")
+    _command(["SET", key, value])
+
+
 def save_token_raw(raw: str) -> bool:
     if not storage_ready():
         return False

@@ -55,6 +55,18 @@ class GmailClient:
             raise _translate(exc) from exc
         return sent.get("id", "")
 
+    def send_notice(self, to: str, subject: str, body: str) -> None:
+        message = EmailMessage()
+        message["To"] = to
+        message["From"] = self.get_user_email()
+        message["Subject"] = subject
+        message.set_content(body)
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+        try:
+            self.service.users().messages().send(userId="me", body={"raw": raw}).execute()
+        except Exception as exc:
+            raise _translate(exc) from exc
+
     def mark_read(self, message_id: str) -> None:
         try:
             self.service.users().messages().modify(
