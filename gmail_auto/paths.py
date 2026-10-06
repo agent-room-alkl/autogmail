@@ -14,7 +14,11 @@ def root() -> Path:
 def data_dir(create: bool = True) -> Path:
     path = root() / "data"
     if create:
-        path.mkdir(parents=True, exist_ok=True)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            if not os.environ.get("VERCEL"):
+                raise
     return path
 
 

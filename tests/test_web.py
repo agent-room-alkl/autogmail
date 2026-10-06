@@ -57,8 +57,9 @@ class WebTests(unittest.TestCase):
         self.assertEqual(forged.status_code, 403)
         os.environ["VERCEL"] = "1"
         try:
-            deployed = self.client.get("/", base_url="https://autogmail.vercel.app")
+            deployed = self.client.get("/", base_url="https://autogmail.vercel.app", follow_redirects=True)
             self.assertEqual(deployed.status_code, 200)
+            self.assertIn("邮箱", deployed.get_data(as_text=True))
         finally:
             os.environ.pop("VERCEL", None)
 
@@ -121,6 +122,43 @@ class WebTests(unittest.TestCase):
         self.assertEqual(blank.status_code, 400)
         self.assertIn("名字", blank.get_data(as_text=True))
 
+    def test_oauth_without_client_id_explains_the_missing_setting(self):
+        previous = os.environ.pop("GMAIL_CLIENT_ID", None)
+        try:
+            page = self.client.get("/oauth", follow_redirects=True)
+        finally:
+            if previous is not None:
+                os.environ["GMAIL_CLIENT_ID"] = previous
+        self.assertIn("GMAIL_CLIENT_ID", page.get_data(as_text=True))
+
+    def test_login_asks_for_an_email_before_google(self):
+        page = self.client.get("/login")
+        self.assertIn("邮箱", page.get_data(as_text=True))
+        self.assertNotIn("密码", page.get_data(as_text=True))
+        rejected = self.client.post("/login", data={"email": "不是邮箱"})
+        self.assertEqual(rejected.status_code, 400)
+
+    def test_cron_on_vercel_requires_the_secret(self):
+        previous = os.environ.get("VERCEL")
+        secret = os.environ.get("CRON_SECRET")
+        os.environ["VERCEL"] = "1"
+        os.environ["CRON_SECRET"] = "cron-test-secret"
+        try:
+            blocked = self.client.get("/cron")
+            allowed = self.client.get("/cron", headers={"Authorization": "Bearer cron-test-secret"})
+        finally:
+            if previous is None:
+                os.environ.pop("VERCEL", None)
+            else:
+                os.environ["VERCEL"] = previous
+            if secret is None:
+                os.environ.pop("CRON_SECRET", None)
+            else:
+                os.environ["CRON_SECRET"] = secret
+        self.assertEqual(blocked.status_code, 403)
+        self.assertEqual(allowed.status_code, 200)
+        self.assertFalse(allowed.get_json()["ok"])
+
 
 class OnceModeTests(unittest.TestCase):
     def setUp(self):
@@ -138,6 +176,7 @@ class OnceModeTests(unittest.TestCase):
     def test_once_without_credentials_does_not_open_a_browser(self):
         import main
 
+        before = (CODE_ROOT / "profile.json").read_text(encoding="utf-8")
         code = main.main(["--once"])
         self.assertEqual(code, 1)
-        self.assertIn("示例用户", (CODE_ROOT / "profile.json").read_text(encoding="utf-8"))
+        self.assertEqual((CODE_ROOT / "profile.json").read_text(encoding="utf-8"), before)

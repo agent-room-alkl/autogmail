@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}登录{% endblock %}
+{% block body %}
+<header class="top">
+  <div>
+    <p class="eyebrow">连接 Gmail</p>
+    <h1>登录</h1>
+  </div>
+</header>
+
+{% if error %}
+<p class="banner danger">{{ error }}</p>
+{% endif %}
+{% with messages = get_flashed_messages() %}
+  {% for message in messages %}
+  <p class="banner danger">{{ message }}</p>
+  {% endfor %}
+{% endwith %}
+
+<form method="post" action="{{ url_for('login_submit') }}" class="profile">
+  <label>
+    邮箱
+    <input name="email" type="email" autocomplete="username" inputmode="email" maxlength="254" required placeholder="you@gmail.com" value="{{ email }}">
+  </label>
+  <p class="hint">填写要自动回复的 Gmail。下一步会打开 Google 的登录页，在那里完成登录。</p>
+  <button type="submit">继续</button>
+</form>
+{% endblock %}

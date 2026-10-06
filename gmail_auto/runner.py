@@ -13,6 +13,7 @@ from gmail_auto.store import (
     clear_failure,
     get_processed,
     is_live,
+    live_from_env,
     mark_processed,
     now_text,
     save_last_run,
@@ -43,6 +44,8 @@ def run_once(gmail=None, generate=None) -> RunReport:
 
 def toggle_and_run(confirmed: bool, gmail=None, generate=None) -> RunReport:
     with LOCK:
+        if live_from_env() is not None:
+            raise ConfigError("真实发送由环境变量 LIVE_SEND 控制。改它之后重新部署即可。")
         if not is_live():
             if not confirmed:
                 raise ConfigError("开启真实发送前，请勾选确认。")
@@ -135,14 +138,14 @@ def _run_locked(gmail=None, generate=None) -> RunReport:
         report.checked += 1
         decision = classify(mail, user)
         if isinstance(decision, Skip):
-            _skip(mail, decision, report)
+            _skip(gmail, mail, decision, report)
             continue
         if not isinstance(decision, Allow):
             continue
         try:
             reply = generate(mail, profile, decision.language)
         except ReplyError as exc:
-            _fail(mail, report, str(exc))
+            _fail(gmail, mail, report, str(exc))
             continue
         try:
             if live:
@@ -151,6 +154,7 @@ def _run_locked(gmail=None, generate=None) -> RunReport:
                 clear_failure(mail.id)
                 report.sent += 1
                 report.lines.append(f"已回复：{short_subject(mail.subject)}")
+                _remember(gmail, mail.id, done=True)
                 try:
                     gmail.mark_read(mail.id)
                 except ConfigError:
@@ -162,15 +166,16 @@ def _run_locked(gmail=None, generate=None) -> RunReport:
                 report.drafted += 1
                 report.lines.append(f"已写入本地：{short_subject(mail.subject)}")
         except ConfigError as exc:
-            _fail(mail, report, str(exc))
+            _fail(gmail, mail, report, str(exc))
     if already and report.checked == 0:
         report.lines.append(f"有 {already} 封未读信已经处理过，没有再次回复。")
     report.lines = report.lines[:40]
     return report
 
 
-def _skip(mail: Mail, decision: Skip, report: RunReport) -> None:
+def _skip(gmail, mail: Mail, decision: Skip, report: RunReport) -> None:
     mark_processed(_record(mail, "skipped", decision.reason, "", "", decision.sensitive))
+    _remember(gmail, mail.id, done=True)
     report.skipped += 1
     if decision.sensitive:
         report.lines.append("跳过一封涉及密码、验证码、证件或银行卡的信。")
@@ -178,16 +183,40 @@ def _skip(mail: Mail, decision: Skip, report: RunReport) -> None:
         report.lines.append(f"跳过：{short_subject(mail.subject)}（{decision.reason}）")
 
 
-def _fail(mail: Mail, report: RunReport, message: str) -> None:
-    count = bump_failure(mail.id)
+def _fail(gmail, mail: Mail, report: RunReport, message: str) -> None:
+    already = False
+    has_retry = getattr(gmail, "has_retry", None)
+    if has_retry is not None:
+        try:
+            already = bool(has_retry(mail))
+        except Exception:
+            already = False
+    try:
+        count = bump_failure(mail.id)
+    except ConfigError:
+        count = 1
+    if already:
+        count = max(count, 2)
     subject = short_subject(mail.subject)
     if count >= 2:
         mark_processed(_record(mail, "skipped", f"{message} 已停止重复处理。", "", "", False))
+        _remember(gmail, mail.id, done=True)
         report.skipped += 1
         report.lines.append(f"停止处理：{subject}（{message}）")
         return
+    _remember(gmail, mail.id, done=False)
     report.failed += 1
     report.lines.append(f"这次没写成：{subject}（{message}）下一轮会再试一次。")
+
+
+def _remember(gmail, message_id: str, done: bool) -> None:
+    note = getattr(gmail, "note_done" if done else "note_retry", None)
+    if note is None:
+        return
+    try:
+        note(message_id)
+    except Exception:
+        return
 
 
 def _record(mail: Mail, action: str, reason: str, reply: str, language: str, sensitive: bool, outbox: str = "") -> dict:

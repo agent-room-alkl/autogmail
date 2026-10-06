@@ -1,6 +1,7 @@
 import base64
 import html
 import json
+import os
 import re
 from email.message import EmailMessage
 from email.header import decode_header
@@ -15,8 +16,10 @@ from gmail_auto.paths import atomic_write, root
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 UNREAD_QUERY = (
     "is:unread in:inbox -category:promotions -category:social "
-    "-category:forums -in:chats -in:spam -in:trash"
+    "-category:forums -in:chats -in:spam -in:trash -label:autogmail-done"
 )
+DONE_LABEL = "autogmail-done"
+RETRY_LABEL = "autogmail-retry"
 RECENT_QUERY = "in:inbox -in:chats -in:spam -in:trash"
 
 
@@ -25,6 +28,7 @@ class GmailClient:
         creds = load_credentials(allow_browser=allow_browser)
         self.service = _build_service(creds)
         self._email = ""
+        self._label_ids: dict[str, str] = {}
 
     def get_user_email(self) -> str:
         if not self._email:
@@ -61,6 +65,63 @@ class GmailClient:
         except Exception as exc:
             raise _translate(exc) from exc
 
+    def has_retry(self, mail: Mail) -> bool:
+        label_id = self._label_id(RETRY_LABEL, create=False)
+        return bool(label_id and label_id in (mail.label_ids or []))
+
+    def note_retry(self, message_id: str) -> None:
+        self._add_label(message_id, RETRY_LABEL)
+
+    def note_done(self, message_id: str) -> None:
+        done = self._label_id(DONE_LABEL, create=True)
+        body: dict = {"addLabelIds": [done]}
+        retry = self._label_ids.get(RETRY_LABEL)
+        if retry:
+            body["removeLabelIds"] = [retry]
+        try:
+            self.service.users().messages().modify(userId="me", id=message_id, body=body).execute()
+        except Exception as exc:
+            raise _translate(exc) from exc
+
+    def _add_label(self, message_id: str, name: str) -> None:
+        label_id = self._label_id(name, create=True)
+        try:
+            self.service.users().messages().modify(
+                userId="me",
+                id=message_id,
+                body={"addLabelIds": [label_id]},
+            ).execute()
+        except Exception as exc:
+            raise _translate(exc) from exc
+
+    def _label_id(self, name: str, create: bool) -> str | None:
+        if name in self._label_ids:
+            return self._label_ids[name]
+        try:
+            listed = self.service.users().labels().list(userId="me").execute()
+        except Exception as exc:
+            raise _translate(exc) from exc
+        for label in listed.get("labels") or []:
+            label_name = label.get("name")
+            label_id = label.get("id")
+            if label_name and label_id:
+                self._label_ids[label_name] = label_id
+        if name in self._label_ids or not create:
+            return self._label_ids.get(name)
+        try:
+            created = self.service.users().labels().create(
+                userId="me",
+                body={
+                    "name": name,
+                    "labelListVisibility": "labelHide",
+                    "messageListVisibility": "hide",
+                },
+            ).execute()
+        except Exception as exc:
+            raise _translate(exc) from exc
+        self._label_ids[name] = created["id"]
+        return created["id"]
+
     def _list(self, query: str, limit: int) -> list[Mail]:
         size = max(1, min(int(limit), 25))
         try:
@@ -87,13 +148,36 @@ class GmailClient:
         return mails
 
 
+def web_client_config() -> dict | None:
+    client_id = os.getenv("GMAIL_CLIENT_ID", "").strip()
+    client_secret = os.getenv("GMAIL_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        return None
+    return {
+        "web": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+    }
+
+
 def load_credentials(allow_browser: bool):
+    from gmail_auto.token_store import load_token_raw
+
+    stored = load_token_raw()
+    if stored:
+        return _refresh_saved(_credentials_from_raw(stored), None, persist_remote=True)
+
+    env_creds = _credentials_from_env()
+    if env_creds is not None:
+        return _refresh_saved(env_creds, None, persist_remote=False)
+
     token_path = root() / "token.json"
     creds = None
     if token_path.exists():
         try:
-            from google.auth.exceptions import RefreshError
-            from google.auth.transport.requests import Request
             from google.oauth2.credentials import Credentials
         except ImportError as exc:
             raise ConfigError("还没安装依赖。请先运行 pip install -r requirements.txt。") from exc
@@ -103,25 +187,15 @@ def load_credentials(allow_browser: bool):
             if not allow_browser:
                 raise ConfigError("token.json 打不开。请删掉后重新运行程序。这次没有打开浏览器。") from exc
             creds = None
-        if creds and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-                atomic_write(token_path, creds.to_json())
-            except RefreshError as exc:
-                token_path.unlink(missing_ok=True)
-                creds = None
-                if not allow_browser:
-                    raise ConfigError(
-                        "本机保存的 Gmail 授权已失效。请重新运行程序，再在浏览器里同意一次。这次没有打开浏览器。"
-                    ) from exc
-            except Exception as exc:
-                raise ConfigError("暂时刷新不了 Gmail 授权，请检查网络后再试。这次没有打开浏览器。") from exc
+        creds = _refresh_saved(creds, token_path, persist_remote=False)
         if creds and creds.valid and creds.has_scopes(SCOPES):
             return creds
 
-    if not allow_browser:
+    if not allow_browser or os.environ.get("VERCEL"):
         if creds and not creds.has_scopes(SCOPES):
-            raise ConfigError("已保存的授权缺少读信或发信权限。请删掉 token.json 后重新运行。")
+            raise ConfigError("已保存的授权缺少读信或发信权限。请再连接一次 Gmail。")
+        if os.environ.get("VERCEL"):
+            raise ConfigError("还没有连接 Gmail。请在页面上点「连接 Gmail」，在浏览器里同意一次。")
         raise ConfigError("还没有完成本机 Gmail 授权。请重新运行程序，并在弹出的浏览器里同意一次。")
 
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -141,6 +215,61 @@ def load_credentials(allow_browser: bool):
         success_message="授权已完成，可以关掉这个页面。",
     )
     atomic_write(token_path, creds.to_json())
+    return creds
+
+
+def _credentials_from_env():
+    raw = os.getenv("GMAIL_TOKEN_JSON", "").strip()
+    if not raw:
+        return None
+    return _credentials_from_raw(raw)
+
+
+def _credentials_from_raw(raw: str):
+    try:
+        info = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ConfigError("保存的 Gmail 授权不是合法的 JSON。") from exc
+    if not isinstance(info, dict):
+        raise ConfigError("保存的 Gmail 授权不是合法的 JSON。")
+    try:
+        from google.oauth2.credentials import Credentials
+    except ImportError as exc:
+        raise ConfigError("还没安装依赖。请先运行 pip install -r requirements.txt。") from exc
+    try:
+        return Credentials.from_authorized_user_info(info, SCOPES)
+    except ValueError as exc:
+        raise ConfigError("保存的 Gmail 授权缺少 refresh_token、client_id 或 client_secret。") from exc
+
+
+def _refresh_saved(creds, token_path, persist_remote: bool):
+    if not (creds and creds.expired and creds.refresh_token):
+        return creds
+    try:
+        from google.auth.exceptions import RefreshError
+        from google.auth.transport.requests import Request
+    except ImportError as exc:
+        raise ConfigError("还没安装依赖。请先运行 pip install -r requirements.txt。") from exc
+    try:
+        creds.refresh(Request())
+    except RefreshError as exc:
+        if token_path is not None:
+            token_path.unlink(missing_ok=True)
+        where = "已保存的 Gmail 授权" if token_path is None else "本机保存的授权"
+        again = "请在页面上再点一次「连接 Gmail」。" if token_path is None else "请在本机重新运行程序并同意一次。"
+        raise ConfigError(f"{where}已失效。{again}") from exc
+    except Exception as exc:
+        raise ConfigError("暂时刷新不了 Gmail 授权，请检查网络后再试。") from exc
+    raw = creds.to_json()
+    if token_path is not None:
+        try:
+            atomic_write(token_path, raw)
+        except OSError:
+            pass
+    if persist_remote:
+        from gmail_auto.token_store import save_token_raw
+
+        save_token_raw(raw)
     return creds
 
 

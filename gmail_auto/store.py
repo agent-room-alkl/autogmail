@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from datetime import datetime
 
@@ -12,7 +13,19 @@ def now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def live_from_env() -> bool | None:
+    flag = os.getenv("LIVE_SEND", "").strip().lower()
+    if flag in {"1", "true", "yes", "on"}:
+        return True
+    if flag in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
 def is_live() -> bool:
+    forced = live_from_env()
+    if forced is not None:
+        return forced
     data = _read(data_dir(create=False) / "state.json", {"live_send": False})
     return bool(isinstance(data, dict) and data.get("live_send"))
 
@@ -113,4 +126,9 @@ def _read(path, default):
 
 
 def _write(path, data) -> None:
-    atomic_write(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+    try:
+        atomic_write(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+    except OSError:
+        if os.environ.get("VERCEL"):
+            return
+        raise ConfigError("暂时写不了本机记录。")

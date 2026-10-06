@@ -3,7 +3,7 @@
 {% block body %}
 <header class="top">
   <div>
-    <p class="eyebrow">只在本机打开</p>
+    <p class="eyebrow">{% if hosted %}线上运行{% else %}只在本机打开{% endif %}</p>
     <h1>邮件自动回复</h1>
     {% if account %}
     <p class="account">已连接 {{ account }}</p>
@@ -15,7 +15,7 @@
 {% if live %}
 <p class="banner danger">真实发送已开启。新的未读信会按个人资料回复，并标成已读。</p>
 {% else %}
-<p class="banner">现在只演练。回复写到本机 data/outbox，不发信，也不把原信标成已读。</p>
+<p class="banner">{% if hosted %}现在只演练，不会发信。还没授权时，下面不会有邮件。{% else %}现在只演练。回复写到本机 data/outbox，不发信，也不把原信标成已读。{% endif %}</p>
 {% endif %}
 {% if placeholder %}
 <p class="banner warn">个人资料还是占位示例。可以先演练，但不能开启真实发送。</p>
@@ -48,6 +48,9 @@
 {% endif %}
 
 <section class="actions">
+  {% if connect_url and not account %}
+  <p><a class="button" href="{{ connect_url }}">登录并连接 Gmail</a></p>
+  {% endif %}
   <form method="post" action="{{ url_for('run_now') }}" {% if live %}data-confirm="当前是真实发送。这一轮会真正回复还没处理过的未读信，并把原信标成已读。"{% endif %}>
     <button type="submit">按当前模式跑一轮</button>
   </form>
@@ -64,7 +67,10 @@
     <button class="danger" type="submit">开启真实发送并立刻跑一轮</button>
   </form>
   {% endif %}
-  <p class="hint">程序开着时，大约每小时还会自动跑一轮。同一封信只处理一次。促销、社交和论坛邮件不会回复。</p>
+  {% if connect_url and account %}
+  <p><a class="button quiet" href="{{ connect_url }}">换一个邮箱登录</a></p>
+  {% endif %}
+  <p class="hint">{% if hosted %}大约每小时自动检查一次，不用开着本机。真实发送由环境变量 LIVE_SEND 控制。{% else %}程序开着时，大约每小时还会自动跑一轮。{% endif %}同一封信只处理一次。促销、社交和论坛邮件不会回复。</p>
 </section>
 
 <section>

@@ -159,6 +159,7 @@ pre {
 .reply pre { background: #f4f8f5; }
 
 .profile { padding: 16px; display: grid; gap: 14px; }
+.profile button { width: 100%; }
 .profile label { display: grid; gap: 6px; font-weight: 650; }
 .profile .hint { font-weight: 400; }
 

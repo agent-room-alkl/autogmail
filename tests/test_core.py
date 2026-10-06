@@ -10,7 +10,7 @@ from email.policy import default
 from gmail_auto.errors import ConfigError, ProfileError, ReplyError
 from gmail_auto.filters import Allow, Skip, classify, detect_language, is_system_address, same_mailbox
 from gmail_auto.generator import clean_reply, ensure_safe
-from gmail_auto.gmail_client import build_send_body, find_client_file, parse_message
+from gmail_auto.gmail_client import build_send_body, find_client_file, load_credentials, parse_message
 from gmail_auto.models import Mail
 from gmail_auto.paths import CODE_ROOT, root
 from gmail_auto.profile_store import clean_profile, load_profile, profile_is_placeholder, save_profile
@@ -385,6 +385,37 @@ class RunnerTests(TempHome):
         self.assertEqual(fake_off.sent, [])
         self.assertEqual(dry.drafted, 1)
 
+    def test_live_send_env_overrides_the_local_switch(self):
+        from gmail_auto.store import is_live
+
+        previous = os.environ.get("LIVE_SEND")
+        os.environ["LIVE_SEND"] = "true"
+        try:
+            self.assertTrue(is_live())
+            os.environ["LIVE_SEND"] = "false"
+            self.assertFalse(is_live())
+        finally:
+            if previous is None:
+                os.environ.pop("LIVE_SEND", None)
+            else:
+                os.environ["LIVE_SEND"] = previous
+
+    def test_token_store_is_empty_until_kv_is_configured(self):
+        from gmail_auto.token_store import load_token_raw
+
+        saved = {name: os.environ.pop(name, None) for name in (
+            "KV_REST_API_URL",
+            "KV_REST_API_TOKEN",
+            "UPSTASH_REDIS_REST_URL",
+            "UPSTASH_REDIS_REST_TOKEN",
+        )}
+        try:
+            self.assertIsNone(load_token_raw())
+        finally:
+            for name, value in saved.items():
+                if value is not None:
+                    os.environ[name] = value
+
     def test_client_secret_must_be_a_desktop_app(self):
         with self.assertRaises(ConfigError) as missing:
             find_client_file()
@@ -396,6 +427,41 @@ class RunnerTests(TempHome):
         self.assertIn("桌面应用", str(wrong.exception))
         path.write_text(json.dumps({"installed": {"client_id": "placeholder"}}), encoding="utf-8")
         self.assertEqual(find_client_file(), path)
+
+    def test_gmail_token_can_come_from_the_environment(self):
+        previous = os.environ.get("GMAIL_TOKEN_JSON")
+        os.environ["GMAIL_TOKEN_JSON"] = json.dumps(
+            {
+                "token": "test-access-token",
+                "refresh_token": "test-refresh-token",
+                "client_id": "test.apps.googleusercontent.com",
+                "client_secret": "test-secret",
+                "scopes": ["https://www.googleapis.com/auth/gmail.modify"],
+                "expiry": "2099-01-01T00:00:00Z",
+            }
+        )
+        try:
+            creds = load_credentials(allow_browser=False)
+        finally:
+            if previous is None:
+                os.environ.pop("GMAIL_TOKEN_JSON", None)
+            else:
+                os.environ["GMAIL_TOKEN_JSON"] = previous
+        self.assertEqual(creds.refresh_token, "test-refresh-token")
+        self.assertTrue(creds.valid)
+
+    def test_gmail_token_env_rejects_bad_json(self):
+        previous = os.environ.get("GMAIL_TOKEN_JSON")
+        os.environ["GMAIL_TOKEN_JSON"] = "not-json"
+        try:
+            with self.assertRaises(ConfigError) as bad:
+                load_credentials(allow_browser=False)
+        finally:
+            if previous is None:
+                os.environ.pop("GMAIL_TOKEN_JSON", None)
+            else:
+                os.environ["GMAIL_TOKEN_JSON"] = previous
+        self.assertIn("JSON", str(bad.exception))
 
     def test_shipped_profile_stays_a_placeholder(self):
         raw = json.loads((CODE_ROOT / "profile.json").read_text(encoding="utf-8"))

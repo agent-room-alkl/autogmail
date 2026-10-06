@@ -5,6 +5,7 @@
 """
 
 import argparse
+import os
 
 from flask import Flask
 
@@ -48,7 +49,8 @@ def _main(argv: list[str] | None) -> int:
         run_once()
         return 0
     _connect(optional=True)
-    start_scheduler()
+    if not os.environ.get("VERCEL"):
+        start_scheduler()
     mode = "真实发送已开启" if is_live() else "只演练，回复写到本机，不发信"
     say("个人 Gmail 自动回复已启动。")
     say(f"后台页面：http://127.0.0.1:{PORT}")
