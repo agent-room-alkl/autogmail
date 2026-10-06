@@ -59,6 +59,9 @@
       <h2>尚未授权</h2>
       <p class="hint">授权后读取收件箱，并按小时自动检查。久未登录时，也可以在这里手工授权。</p>
       {% endif %}
+      {% if auth_error %}
+      <p class="banner danger">{{ auth_error }}</p>
+      {% endif %}
       {% if gmail_stale %}
       <p class="banner warn">已经较长时间没有授权。如果登不上，或一直看不到邮件，请手工重新授权。</p>
       {% endif %}

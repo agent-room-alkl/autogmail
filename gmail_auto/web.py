@@ -147,6 +147,8 @@ def configure_app(app: Flask) -> None:
             options["login_hint"] = hint
         auth_url, state = flow.authorization_url(**options)
         session["oauth_state"] = state
+        session["code_verifier"] = flow.code_verifier or ""
+        session.pop("auth_error", None)
         return redirect(auth_url)
 
     @app.get("/oauth/callback")
@@ -154,20 +156,21 @@ def configure_app(app: Flask) -> None:
         config = web_client_config()
         expected = session.get("oauth_state")
         if config is None or not expected or request.args.get("state") != expected:
-            flash("授权状态对不上，请再点一次「连接 Gmail」。")
+            _auth_failed("授权状态对不上，请再点一次「授权 Gmail」。")
             return redirect(url_for("home"))
         if request.args.get("error"):
-            flash("Gmail 授权没有完成。")
+            _auth_failed("Gmail 授权没有完成。请再点一次「授权 Gmail」。")
             return redirect(url_for("home"))
         from google_auth_oauthlib.flow import Flow
         from gmail_auto.token_store import save_token_raw, storage_ready
 
         flow = Flow.from_client_config(config, SCOPES)
         flow.redirect_uri = _oauth_redirect()
+        flow.code_verifier = session.get("code_verifier") or None
         try:
             flow.fetch_token(authorization_response=_external_url())
         except Exception:
-            flash("Gmail 授权没有完成。请再试一次。")
+            _auth_failed("Gmail 没有收下这次授权。请再点一次「授权 Gmail」。")
             return redirect(url_for("home"))
         creds = flow.credentials
         if not getattr(creds, "refresh_token", None):
@@ -176,6 +179,8 @@ def configure_app(app: Flask) -> None:
         raw = creds.to_json()
         session["gmail_token"] = raw
         session.pop("oauth_state", None)
+        session.pop("code_verifier", None)
+        session.pop("auth_error", None)
         if storage_ready():
             save_token_raw(raw)
         gmail_email = session.get("user") or ""
@@ -304,7 +309,13 @@ def _home_context() -> dict:
         "gmail_email": auth.get("email", ""),
         "gmail_when": auth.get("authorized_text", ""),
         "gmail_stale": auth.get("stale", False),
+        "auth_error": "" if account else session.get("auth_error", ""),
     }
+
+
+def _auth_failed(message: str) -> None:
+    session["auth_error"] = message
+    flash(message)
 
 
 def _login_required():
